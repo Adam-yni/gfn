@@ -6,3 +6,7 @@ In this work, we adapt GFlowNets to operate at the reasoning step level by lever
 
 This work highlights the potential of GFlowNets as a powerful tool for developing more robust, diverse, and versatile mathematical reasoning capabilities in LLMs, paving the way for future advancements in AI-driven problem-solving.
 
+<p align="center">
+  <img src="reward.png" alt="Reward earned during FineTuning" width="45%">
+  <img src="loss.png" alt="Loss" width="45%">
+</p>
