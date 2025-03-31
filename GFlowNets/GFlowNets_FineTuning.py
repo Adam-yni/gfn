@@ -429,4 +429,4 @@ def mini_train(choice,batch_size):
 mini_train(choice=1,batch_size=32)
 
 
-#accelerate launch gfnNOCML.py
+#accelerate launch GFlowNets_FineTuning.py
