@@ -1,15 +1,8 @@
 import torch
-
-
-
-
-
 def get_newline_token_id(tokenizer):
     all_tokens = [tokenizer.decode([i]) for i in range(tokenizer.vocab_size)]
     newline_token_ids = [i for i, token in enumerate(all_tokens) if "\n" in token]
     return newline_token_ids
-
-
 
 class ReplayBuffer:
     def __init__(self, max_size):
