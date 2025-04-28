@@ -9,15 +9,15 @@ python seed.py --model "your_model" --num_samples "number_of_samples"
 ```
 ### 1.2 Generating the Training Dataset with OmegaPRM
 
-Once the seed dataset is created, you can generate the training dataset for the PRM using the `run_mcts.py` script. This script implements the OmegaPRM algorithm and requires parameters for the model and the dataset path.
+Once the seed dataset is created, you can generate the training dataset for the PRM using the `run_mcts.py` script. This script implements the OmegaPRM algorithm and requires the path of the model that will generate the rollouts and the seed dataset path.
 ```bash
-python run_mcts.py --model "your_model" --dataset "your_dataset"
+python run_mcts.py --model "your_model" --dataset "your_seed_dataset"
 ```
 ### 1.3 Augmenting the Dataset
 
 To further enhance the training dataset, you can use the `data_augmentation.py` script. This script leverages rollouts generated during the evaluation of steps to significantly increase the dataset size. You'll need to specify the input path, output path, and optionally a similarity threshold.
 ```bash
-python data_augmentation.py --input_path "your_dataset" --output_path "output_path.csv" --similarity_threshold 0.88
+python data_augmentation.py --input_path "your_omegaPRM_dataset" --output_path "output_path_dataset.csv" --similarity_threshold 0.88
 ```
 ### 1.4 PRM Training Dataset
 The final dataset will consist of three columns:  
@@ -28,7 +28,7 @@ The final dataset will consist of three columns:
 ## 2. Training the PRM
 
 ### 2.1 Finetuning
-Now that the dataset is ready, we can train our chosen LLM to become a PRM using the script available in the `/PRM_FineTuning` directory. To meet our requirement of evaluating steps with scores ranging between 0 and 1, we replace the default loss function used by the Transformers trainer (MSE Loss) with BCE Loss, which is better suited to our problem. This training process transforms a language model into a specialized PRM.
+Now that the dataset is ready, we can train our chosen LLM to become a PRM using the script available in the `/PRM_FineTuning` directory. To meet our requirement of evaluating steps with scores ranging between 0 and 1, we replace the default loss function used by the Transformers trainer (MSE Loss) with BCE Loss, which is better suited to our problem.
 ```bash
 python PRM_Finetuning.py --model "your_model" --dataset "your_dataset"
 ```
@@ -42,7 +42,7 @@ python Guided_Search.py --"your_model" --"your_PRM" --"temperature" --"top_p" --
 ## 3. GFlowNets
 
 ### 3.1 GflowNets Finetuning
-Finally, you can fine-tune your chosen LLM using the script provided in the `/GFlowNets` directory. GFlowNets trained models naturally sample diverse, high-quality solutions proportional to their rewards, as measured by the PRM.
+Finally, you can finetune your chosen LLM using the script provided in the `/GFlowNets` directory. GFlowNets trained models naturally sample diverse, high-quality solutions proportional to their rewards, as measured by the PRM.
 ```bash
 python main.py --"your_model" --"your_PRM" 
 ```
