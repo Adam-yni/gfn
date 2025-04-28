@@ -1,6 +1,6 @@
 # Accurate and Diverse LLM Mathematical Reasoning via Automated PRM-Guided GFlowNets
 
-### 1. Generate the training Dataset for the Process Reward Model (PRM)
+## 1. Generate the training Dataset for the Process Reward Model (PRM)
 ### 1.1 Generating a Seed Dataset
 
 The first step is to create a seed dataset containing questions, answers, and an indicator of whether the answer is correct. This can be done using the `seed.py` script with parameters for your model and the number of samples to generate.
@@ -19,7 +19,7 @@ To further enhance the training dataset, you can use the `data_augmentation.py` 
 ```bash
 python data_augmentation.py --input_path "your_dataset" --output_path "output_path.csv" --similarity_threshold 0.88
 ```
-## 1.4 PRM Training Dataset
+### 1.4 PRM Training Dataset
 The final dataset will consist of three columns:  
 - The first column contains the question and the beginning of the answer.  
 - The second column contains the next step (a single step, not the entire continuation of the answer).  
@@ -27,13 +27,13 @@ The final dataset will consist of three columns:
 
 ## 2. Training the PRM
 
-## 2.1 Finetuning
+### 2.1 Finetuning
 Now that the dataset is ready, we can train our chosen LLM to become a PRM using the script available in the `/PRM_FineTuning` directory. To meet our requirement of evaluating steps with scores ranging between 0 and 1, we replace the default loss function used by the Transformers trainer (MSE Loss) with BCE Loss, which is better suited to our problem. This training process transforms a language model into a specialized PRM.
 ```bash
 python PRM_Finetuning.py --model "your_model" --dataset "your_dataset"
 ```
 
-## 2.2 Testing with Guided Search
+### 2.2 Testing with Guided Search
 
 After training the PRM, we can evaluate its effectiveness using the script in the `/Guided Search` directory. This allows us to test whether our PRM successfully guides a base LLM to produce higher quality responses to mathematical questions.
 ```bash
@@ -41,7 +41,7 @@ python Guided_Search.py --"your_model" --"your_PRM" --"temperature" --"top_p" --
 ```
 ## 3. GFlowNets
 
-## 3.1 GflowNets Finetuning
+### 3.1 GflowNets Finetuning
 Finally, you can fine-tune your chosen LLM using the script provided in the `/GFlowNets` directory. GFlowNets trained models naturally sample diverse, high-quality solutions proportional to their rewards, as measured by the PRM.
 ```bash
 python main.py --"your_model" --"your_PRM" 
