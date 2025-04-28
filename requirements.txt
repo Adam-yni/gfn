@@ -1,0 +1,11 @@
+transformers==4.45.2
+vllm
+accelerate
+torch
+flash-attn
+pandas
+wandb
+datasets
+peft
+tqdm
+sentence_transformers
