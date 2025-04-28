@@ -1,13 +1,54 @@
-### Accurate and Diverse LLM Mathematical Reasoning via Automated PRM-Guided GFlowNetsAccurate and Diverse LLM Mathematical Reasoning via Automated PRM-Guided GFlowNets
+# Accurate and Diverse LLM Mathematical Reasoning via Automated PRM-Guided GFlowNets
 
-Achieving both accuracy and diverse reasoning remains
-challenging for Large Language Models (LLMs) in complex domains like mathematics. A key bottleneck is evaluating intermediate reasoning steps to guide generation without costly human annotations. To address this, we first introduce a novel Process Reward Model (PRM) trained automatically using Monte Carlo Tree Search coupled with a similarity-based data augmentation technique, effectively capturing step-level reasoning quality. Leveraging this PRM, we then adapt Generative Flow Networks (GFlowNets) to operate at the reasoning step level. Unlike traditional reinforcement learning focused on maximizing a single reward, GFlowNets naturally sample diverse, high-quality solutions proportional to their rewards, as measured by our PRM. Empirical evaluation shows strong improvements in both accuracy and solution diversity on challenging mathematical benchmarks (e.g., +2.59% absolute accuracy on MATH Level 5 for Llama3.2-3B), with effective generalization to unseen datasets (+9.4% absolute on SAT MATH). Our work demonstrates the potential of PRM-guided, step-level GFlowNets for developing more robust and versatile mathematical reasoning in LLMs.
+### 1. Generate the training Dataset for the Process Reward Model (PRM)
+### 1.1 Generating a Seed Dataset
 
-In this work, we adapt GFlowNets to operate at the reasoning step level by leveraging a modified version of the Sub-TB Loss, originally introduced in [Amortizing intractable inference in large language models](https://arxiv.org/abs/2310.04363), which we further adjusted to function in a step-level context rather than a token-level context, aiming to enhance mathematical reasoning in Large Language Models (LLMs). Traditional reinforcement learning methods typically focus on maximizing a single reward signal, which can lead to limited exploration and solution diversity. In contrast, GFlowNets naturally encourage diverse solution strategies while preserving accuracy, making them particularly well-suited for complex reasoning tasks.
+The first step is to create a seed dataset containing questions, answers, and an indicator of whether the answer is correct. This can be done using the `seed.py` script with parameters for your model and the number of samples to generate.
+```bash
+python seed.py --model "your_model" --num_samples "number_of_samples"
+```
+### 1.2 Generating the Training Dataset with OmegaPRM
 
-This work highlights the potential of GFlowNets as a powerful tool for developing more robust, diverse, and versatile mathematical reasoning capabilities in LLMs, paving the way for future advancements in AI-driven problem-solving.  For more details about GFlowNets, refer to the foundational [GFlowNets paper](https://arxiv.org/abs/2111.09266).
+Once the seed dataset is created, you can generate the training dataset for the PRM using the `run_mcts.py` script. This script implements the OmegaPRM algorithm and requires parameters for the model and the dataset path.
+```bash
+python run_mcts.py --model "your_model" --dataset "your_dataset"
+```
+### 1.3 Augmenting the Dataset
 
+To further enhance the training dataset, you can use the `data_augmentation.py` script. This script leverages rollouts generated during the evaluation of steps to significantly increase the dataset size. You'll need to specify the input path, output path, and optionally a similarity threshold.
+```bash
+python data_augmentation.py --input_path "your_dataset" --output_path "output_path.csv" --similarity_threshold 0.88
+```
+## 1.4 PRM Training Dataset
+The final dataset will consist of three columns:  
+- The first column contains the question and the beginning of the answer.  
+- The second column contains the next step (a single step, not the entire continuation of the answer).  
+- The third column corresponds to the evaluation of the step present in the second column.  
+
+## 2. Training the PRM
+
+## 2.1 Finetuning
+Now that the dataset is ready, we can train our chosen LLM to become a PRM using the script available in the `/PRM_FineTuning` directory. To meet our requirement of evaluating steps with scores ranging between 0 and 1, we replace the default loss function used by the Transformers trainer (MSE Loss) with BCE Loss, which is better suited to our problem. This training process transforms a language model into a specialized PRM.
+```bash
+python PRM_Finetuning.py --model "your_model" --dataset "your_dataset"
+```
+
+## 2.2 Testing with Guided Search
+
+After training the PRM, we can evaluate its effectiveness using the script in the `/Guided Search` directory. This allows us to test whether our PRM successfully guides a base LLM to produce higher quality responses to mathematical questions.
+```bash
+python Guided_Search.py --"your_model" --"your_PRM" --"temperature" --"top_p" --"number_of_proposed_steps" --"max_steps"
+```
+## 3. GFlowNets
+
+## 3.1 GflowNets Finetuning
+Finally, you can fine-tune your chosen LLM using the script provided in the `/GFlowNets` directory. GFlowNets trained models naturally sample diverse, high-quality solutions proportional to their rewards, as measured by the PRM.
+```bash
+python main.py --"your_model" --"your_PRM" 
+```
 <p align="center">
-  <img src="./images/reward.png" alt="Reward earned during FineTuning" width="49%">
+  <img src="./images/reward.png" alt="Reward earned during GFlowNets FineTuning" width="49%">
   <img src="./images/loss.png" alt="Loss" width="49%">
 </p>
+
+
