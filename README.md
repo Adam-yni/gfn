@@ -1,5 +1,9 @@
 # Accurate and Diverse LLM Mathematical Reasoning via Automated PRM-Guided GFlowNets
 
+This project implements the methodology described in our research paper:
+
+**[Accurate and Diverse LLM Mathematical Reasoning via Automated PRM-Guided GFlowNets](https://arxiv.org/abs/2504.19981)**
+
 ## 1. Generate the training Dataset for the Process Reward Model (PRM)
 ### 1.1 Generating a Seed Dataset
 
@@ -51,4 +55,17 @@ accelerate launch main.py --"your_model" --"your_PRM"
   <img src="./images/loss.png" alt="Loss" width="49%">
 </p>
 
+
+If you use our work, please cite our paper:
+
+```bibtex
+@misc{younsi2025accuratediversellmmathematical,
+      title={Accurate and Diverse LLM Mathematical Reasoning via Automated PRM-Guided GFlowNets}, 
+      author={Adam Younsi and Abdalgader Abubaker and Mohamed El Amine Seddik and Hakim Hacid and Salem Lahlou},
+      year={2025},
+      eprint={2504.19981},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2504.19981}, 
+}
 
