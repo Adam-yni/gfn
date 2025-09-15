@@ -239,7 +239,7 @@ class GFlowNet:
                 finished = True
             question = self.tokenizer.decode(
                 inputs['input_ids'][i], skip_special_tokens=True
-            ).split('step.')[5].split('assistant')[0].strip()
+            ).split('step.')[4].split('assistant')[0].strip()
             newline_token_ids_tensor = torch.tensor(self.newline_token_id,device=self.accelerator.device)
 
             valid = torch.any(torch.isin(seq, newline_token_ids_tensor))
@@ -266,3 +266,4 @@ class GFlowNet:
         if self.accelerator.is_main_process:
             self.run.log({"mean reward current": torch.mean(mean_rewards_gathered[0]).item()})
         return mean_rewards
+
