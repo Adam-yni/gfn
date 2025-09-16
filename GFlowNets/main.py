@@ -14,8 +14,8 @@ from datasets import load_dataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from GFlowNets import GFlowNet
+from skywork.model_utils.prm_model import PRM_MODEL
 
-torch.autograd.set_detect_anomaly(True)
 torch.backends.cuda.enable_mem_efficient_sdp(False)
 torch.backends.cuda.enable_flash_sdp(False)
 torch.backends.cuda.enable_math_sdp(True)
@@ -24,11 +24,11 @@ torch.backends.cuda.enable_math_sdp(True)
 def set_environment_variables():
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:1024"
-    os.environ["HF_HOME"] = "/home/ec2-user/SageMaker/huggingface_cache"
-    os.environ["TRANSFORMERS_CACHE"] = "/home/ec2-user/SageMaker/huggingface_cache/transformers"
-    os.environ["HF_DATASETS_CACHE"] = "/home/ec2-user/SageMaker/huggingface_cache/datasets"
-    os.environ["TORCH_HOME"] = "/home/ec2-user/SageMaker/huggingface_cache/torch"
-    os.environ["TMPDIR"] = "/home/ec2-user/SageMaker/tmp"
+    # os.environ["HF_HOME"] = "/home/ec2-user/SageMaker/huggingface_cache"
+    # os.environ["TRANSFORMERS_CACHE"] = "/home/ec2-user/SageMaker/huggingface_cache/transformers"
+    # os.environ["HF_DATASETS_CACHE"] = "/home/ec2-user/SageMaker/huggingface_cache/datasets"
+    # os.environ["TORCH_HOME"] = "/home/ec2-user/SageMaker/huggingface_cache/torch"
+    # os.environ["TMPDIR"] = "/home/ec2-user/SageMaker/tmp"
     os.environ["TORCH_NCCL_BLOCKING_WAIT"] = "0"
     os.environ["TORCH_NCCL_ASYNC_ERROR_HANDLING"] = "0"
     os.environ["TORCH_NCCL_TIMEOUT_MS"] = "12000000"
@@ -48,22 +48,17 @@ def extract_answer_nvidia(answer):
     return match.group(1)
 
 
-def load_model_and_tokenizer(model_name, reward_model_name):
+def load_model_and_tokenizer(model_name, reward_model_name, accelerator):
     model = AutoModelForCausalLM.from_pretrained(
         model_name, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, attn_implementation="flash_attention_2"
     )
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
-
-    bnb_config = BitsAndBytesConfig(load_in_4bit=True)
-    reward_model = AutoModelForSequenceClassification.from_pretrained(
-        reward_model_name,
-        torch_dtype=torch.bfloat16,
-        quantization_config=bnb_config,
-        attn_implementation="flash_attention_2",
-    )
-    reward_tokenizer = AutoTokenizer.from_pretrained(reward_model_name, torch_dtype=torch.bfloat16)
+    
+    reward_model = PRM_MODEL.from_pretrained(reward_model_name, torch_dtype=torch.bfloat16).eval()
+    reward_model = reward_model.to(accelerator.device)
+    reward_tokenizer = AutoTokenizer.from_pretrained(reward_model_name, trust_remote_code=True)
     reward_tokenizer.pad_token = reward_tokenizer.eos_token
     reward_tokenizer.padding_side = "left"
 
@@ -71,7 +66,10 @@ def load_model_and_tokenizer(model_name, reward_model_name):
 
 
 def mini_train(choice, batch_size, epoch, model_name, reward_model_name, saved_model_path):
-    model, tokenizer, reward_model, reward_tokenizer = load_model_and_tokenizer(model_name, reward_model_name)
+    accelerator = Accelerator(
+        mixed_precision="bf16", kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)]
+    )
+    model, tokenizer, reward_model, reward_tokenizer = load_model_and_tokenizer(model_name, reward_model_name, accelerator)
 
     if choice == 0:
         dataset = load_dataset("openai/gsm8k", "main", split="train")
@@ -82,7 +80,7 @@ def mini_train(choice, batch_size, epoch, model_name, reward_model_name, saved_m
         response = "expected_answer"
         dataset = load_dataset(
             "nvidia/OpenMathInstruct-2", split="train_1M", cache_dir="~/.cache/huggingface/datasets/"
-        ).select([i for i in range(700000)])
+        ).select([i for i in range(70000)])
 
         def filter_dataset(example):
             tokenized_inputs = tokenizer.apply_chat_template(
@@ -101,13 +99,11 @@ def mini_train(choice, batch_size, epoch, model_name, reward_model_name, saved_m
             )
             return tokenized_inputs.shape[1] < 1000 and example["problem_source"] == "augmented_math"
 
-        dataset = dataset.filter(filter_dataset).select([i for i in range(100000)]) #train 100k examples
+        dataset = dataset.filter(filter_dataset) #train 100k examples
 
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    accelerator = Accelerator(
-        mixed_precision="bf16", kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)]
-    )
+    
     gfn = GFlowNet(
         model=model,
         tokenizer=tokenizer,
@@ -121,25 +117,22 @@ def mini_train(choice, batch_size, epoch, model_name, reward_model_name, saved_m
         for k, batch in enumerate(tqdm(gfn.dataloader), start=1):
             with accelerator.accumulate(gfn.model):
                 messages = [
-                    [
-                        text for text in batch[column]
-                    ]
+                    text for text in batch[column]
                 ] * gfn.number_generation
-
                 ground_truth_answers = [
-                    extract_answer_gsm8k(text) if choice == 0 else extract_answer_nvidia(text) for text in batch[response]
+                    extract_answer_gsm8k(text) if choice == 0 else text for text in batch[response]
                 ]
 
-                tokenized_inputs = tokenizer.batch_encode_plus(
-                    messages, return_tensors="pt", padding="max_length", max_length=1010, padding_side="left"
+                tokenized_inputs = tokenizer(
+                    messages, return_tensors="pt", padding=True, max_length=1010
                 )
 
                 if "token_type_ids" in tokenized_inputs: #needed for some models
                     tokenized_inputs.pop("token_type_ids")
 
-                gfn.model.module.gradient_checkpointing_disable()
+                # gfn.model.module.gradient_checkpointing_disable()
                 gfn.generate(tokenized_inputs, ground_truth_answers)
-                gfn.model.module.gradient_checkpointing_enable()
+                # gfn.model.module.gradient_checkpointing_enable()
 
                 loss, reward = gfn.step()
 
@@ -155,7 +148,7 @@ def mini_train(choice, batch_size, epoch, model_name, reward_model_name, saved_m
 def main():
     parser = argparse.ArgumentParser(description="Train a GFlowNet model.")
     parser.add_argument("--choice", type=int, default=1, help="Dataset choice: 0 for gsm8k, 1 for nvidia openmath")
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training")
+    parser.add_argument("--batch_size", type=int, default=18, help="Batch size for training")
     parser.add_argument("--epoch", type=int, default=1, help="Number of epochs")
     parser.add_argument("--model_name", type=str, required=True, help="Path to the model")
     parser.add_argument("--reward_model_name", type=str, required=True, help="Path to the reward model")

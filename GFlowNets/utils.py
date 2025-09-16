@@ -1,4 +1,8 @@
 import torch
+import heapq
+import numpy as np
+from transformers import StoppingCriteria
+
 def get_newline_token_id(tokenizer):
     all_tokens = [tokenizer.decode([i]) for i in range(tokenizer.vocab_size)]
     newline_token_ids = [i for i, token in enumerate(all_tokens) if "\n" in token]
@@ -37,7 +41,7 @@ class ReplayBuffer:
         """
         if len(self.buffer) < self.max_size:
             self.buffer.append({
-                "question": question,
+                "question": question.cpu(),
                 "generated_tokens": generated_tokens.cpu(),
                 "step_rewards": step_rewards,
                 "mean_reward": mean_reward,
@@ -48,7 +52,7 @@ class ReplayBuffer:
             if mean_reward > self.min_heap[0][0]:
                 _, index_to_remove = heapq.heappop(self.min_heap)
                 self.buffer[index_to_remove] = {
-                    "question": question,
+                    "question": question.cpu(),
                     "generated_tokens": generated_tokens,
                     "step_rewards": step_rewards,
                     "mean_reward": mean_reward,

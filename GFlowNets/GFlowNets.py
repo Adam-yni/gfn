@@ -9,10 +9,11 @@ from peft import LoraConfig, get_peft_model
 from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 from utils import ReplayBuffer, get_newline_token_id
+from skywork.model_utils.prm_model import PRM_MODEL
+from skywork.model_utils.io_utils import prepare_input, prepare_batch_input_for_model, derive_step_rewards
 
 
-accelerator = Accelerator(mixed_precision='bf16', kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)])#, dataloader_config=dataloader_config) #,gradient_accumulation_steps=2,
-# gradient_checkpointing=True, gradient_checkpointing_enable=True)  
+# Note: Accelerator is provided by caller to avoid duplicate process groups and extra memory.
 class GFlowNet:
     def __init__(self,
                  model,
@@ -27,7 +28,7 @@ class GFlowNet:
                  temperature=0.6,
                  top_p=0.95,
                  top_k=999,
-                 max_new_tokens=800
+                 max_new_tokens=200
                 ):
         self.ReplayBuffer = ReplayBuffer(1000)
         self.subTB_lambda = subTB_lambda
@@ -63,24 +64,39 @@ class GFlowNet:
         self.avg_loss = 0
         self.avg_reward = 0
         self.stop_words_ids = [torch.tensor(newline_id) for newline_id in get_newline_token_id(self.tokenizer)]
-        self.run = wandb.init(project="GFlowNetSTEP", group="gfn0")
+        
+        # Only initialize wandb on the main process (rank 0) to avoid duplicate runs
+        if self.accelerator.is_main_process:
+            self.run = wandb.init(project="GFlowNetSTEP", group="gfn0")
+        else:
+            self.run = None
 
     def calculate_reward(self, query, answer):
-        text_table = wandb.Table(columns=["prompt", "answer", "reward"])
-        list_steps = [step for step in answer.split('\n') if len(step) > 3]
-        to_evaluate = [query + ''.join(list_steps[:i]) + '<next>' + list_steps[i].strip() for i in range(len(list_steps))]
+        processed_data = [prepare_input(query, answer, tokenizer=self.reward_tokenizer, step_token="\n")]
+        input_ids, steps, reward_flags = zip(*processed_data)
+
+        input_ids, attention_mask, reward_flags = prepare_batch_input_for_model(input_ids, reward_flags, self.reward_tokenizer.pad_token_id)
+        # Move to PRM device
+        prm_device = next(self.reward_model.parameters()).device
+        input_ids = input_ids.to(prm_device)
+        attention_mask = attention_mask.to(prm_device)
+        with torch.inference_mode(), torch.amp.autocast('cuda'):
+            _, _, rewards = self.reward_model(input_ids=input_ids, attention_mask=attention_mask, return_probs=True)
+        # _, _, rewards = self.reward_model(input_ids=input_ids, attention_mask=attention_mask, return_probs=True)
+        step_rewards = derive_step_rewards(rewards, reward_flags)
+        # put random rewards between 0 and 1 
+        # step_rewards = torch.rand(len(reward_flags)).unsqueeze(0)
+        step_rewards = torch.tensor(step_rewards)
+
+        # Only log to wandb on the main process
+        if self.accelerator.is_main_process and self.run is not None:
+            text_table = wandb.Table(columns=["prompt", "answer", "reward"])
+            text_table.add_data(query, answer, torch.mean(step_rewards).item())
+            self.run.log({"training_samples": text_table})
         
-        if len(to_evaluate) <=1:
-            return -99, False
-        tokenized_inputs = self.reward_tokenizer.batch_encode_plus(to_evaluate, return_tensors="pt", padding='longest').to(self.reward_model.device)
-        with torch.inference_mode():
-                outputs = self.reward_model(**tokenized_inputs)
-                rewards = torch.sigmoid(outputs.logits).cpu()
-                text_table.add_data(query, answer, torch.mean(rewards).item())
-        self.run.log({"training_samples": text_table})
-        del tokenized_inputs, outputs
+        del input_ids, reward_flags, steps, rewards
         torch.cuda.empty_cache()
-        return rewards, True
+        return step_rewards, True
 
     def sample(self):
         return self.ReplayBuffer.sample_weighted_and_remove(self.batch_size)
@@ -92,7 +108,8 @@ class GFlowNet:
         #unwrapped_model = unwrapped_model.merge_and_unload()
         unwrapped_model.save_pretrained(path, is_main_process=self.accelerator.is_main_process, save_function=self.accelerator.save)
         self.tokenizer.save_pretrained(path)
-        self.run.finish()
+        if self.accelerator.is_main_process and self.run is not None:
+            self.run.finish()
         self.accelerator.wait_for_everyone()
 
     def calculate_loss_from_replay(self):
@@ -168,7 +185,7 @@ class GFlowNet:
             sum_rewards += torch.mean(step_rewards)
             sum_mean_reward += mean_reward
  
-        if self.accelerator.is_main_process:
+        if self.accelerator.is_main_process and self.run is not None:
             self.run.log({"Confidence": sum_confidence/ self.batch_size})
             self.run.log({"Prop": sum_prop/ self.batch_size})
         
@@ -190,7 +207,7 @@ class GFlowNet:
         reward_gathered = self.accelerator.gather([torch.tensor(reward).clone().detach()])
         mean_reward_gathered = self.accelerator.gather([torch.tensor(mean_reward).clone().detach()])
         grad_norm = torch.mean(torch.tensor([torch.norm(param.grad).item() for param in self.model.parameters() if param.grad is not None]))
-        if self.accelerator.is_main_process:
+        if self.accelerator.is_main_process and self.run is not None:
             self.run.log({"loss": torch.mean(loss_gathered[0])})
             self.run.log({"average reward": torch.mean(reward_gathered[0])})
             self.run.log({f"grad_norm": grad_norm})
@@ -209,19 +226,23 @@ class GFlowNet:
         mean_rewards = torch.tensor([], device=self.accelerator.device)
         self.batch_size = len(inputs['input_ids']) // self.number_generation
         inputs = inputs.to(self.accelerator.device)
+        generated_sequences_chunks = []
+        micro_bs = 2
         with torch.inference_mode():
-            generated_sequences = self.model.module.generate(inputs['input_ids'],
-                                                              attention_mask=inputs['attention_mask'],
-                                                              max_new_tokens=self.max_new_tokens,
-                                                              do_sample=True,
-                                                              #temperature=self.temperature,
-                                                              #top_p=self.top_p,
-                                                              #top_k=self.top_k,
-                                                              eos_token_id=self.eos_token_id,
-                                                              pad_token_id=self.tokenizer.pad_token_id,
-                                                              #length_penalty=2.0,
-                                                              )
-        
+            for start in range(0, inputs['input_ids'].size(0), micro_bs):
+                end = min(start + micro_bs, inputs['input_ids'].size(0))
+                out = self.model.module.generate(
+                    inputs['input_ids'][start:end],
+                    attention_mask=inputs['attention_mask'][start:end],
+                    max_new_tokens=self.max_new_tokens,
+                    do_sample=True,
+                    eos_token_id=self.eos_token_id,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    use_cache=False,
+                )
+                generated_sequences_chunks.append(out)
+        generated_sequences = torch.cat(generated_sequences_chunks, dim=0)
+
         for i in range(inputs['input_ids'].shape[0]):
             seq = generated_sequences[i].squeeze()
             prompt = seq[:len(inputs['input_ids'][i])]
@@ -239,14 +260,14 @@ class GFlowNet:
                 finished = True
             question = self.tokenizer.decode(
                 inputs['input_ids'][i], skip_special_tokens=True
-            ).split('step.')[5].split('assistant')[0].strip()
+            )
             newline_token_ids_tensor = torch.tensor(self.newline_token_id,device=self.accelerator.device)
 
             valid = torch.any(torch.isin(seq, newline_token_ids_tensor))
             corr = "I cannot generate a question" #avoid corrupted data
             answer = self.tokenizer.decode(seq, skip_special_tokens=True)
             
-            if len(answer) > 10 and corr not in question and valid:
+            if len(answer) > 10 and corr not in question and valid:               
                 step_rewards,validity = self.calculate_reward(
                     question, answer
                 )
@@ -258,11 +279,11 @@ class GFlowNet:
                     )
                 else:
                     print(answer)
-        del seq, prompt,inputs
+        del seq, prompt, inputs, generated_sequences, generated_sequences_chunks
         torch.cuda.empty_cache()
             
         mean_rewards = torch.mean(mean_rewards)
         mean_rewards_gathered = self.accelerator.gather([mean_rewards])
-        if self.accelerator.is_main_process:
+        if self.accelerator.is_main_process and self.run is not None:
             self.run.log({"mean reward current": torch.mean(mean_rewards_gathered[0]).item()})
         return mean_rewards
