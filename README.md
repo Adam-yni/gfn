@@ -21,7 +21,7 @@ python run_mcts.py --model "your_model" --dataset "your_seed_dataset"
 
 To further enhance the training dataset, you can use the `data_augmentation.py` script. This script leverages rollouts generated during the evaluation of steps to significantly increase the dataset size. You'll need to specify the input path, output path, and optionally a similarity threshold.
 ```bash
-python data_augmentation.py --input_path "your_omegaPRM_dataset" --output_path "output_path_dataset.csv" --similarity_threshold 0.88
+python data_augmentation.py --input_path "your_omegaPRM_dataset" --output_path "output_path_dataset.csv" --similarity_threshold 0.85
 ```
 ### 1.4 PRM Training Dataset
 The final dataset will consist of three columns:  
